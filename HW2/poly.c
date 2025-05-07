@@ -127,8 +127,10 @@ poly poly_merge(poly p1, poly p2) {
       pp1->coeff += pp2->coeff;
       if(pp1->coeff != 0)
         retp = poly_append(retp, pp1);
+      poly f = pp2;
       poly_merge_move_ptr(pp1);
       poly_merge_move_ptr(pp2);
+      free(f);
     } else if(pp1->deg > pp2->deg) {
       retp = poly_append(retp, pp2);
       poly_merge_move_ptr(pp2);
@@ -165,7 +167,7 @@ poly pmult(poly p1, poly p2) {
 }
 
 // Create new polynomial from user input
-// input format example: 2 1 1 4 0 -> x^4 + 2x^1
+// input format example: 2 1 3 4 0 -> 3x^4 + 2x^1
 poly poly_create_from_input() {
   COEFF_T coeff;
   DEG_T deg, cur_mx_deg = DEG_MIN;

@@ -6,7 +6,7 @@
 //  polynomial 1: x^4 + 2x^1
 //  polynomial 2: x^5 + 2x^1
 //  multiplication result: x^9 + 2x^6 + 2x^5 + 4x^2
-// pmult() is at line 260.
+// pmult() is at line 272.
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -30,9 +30,10 @@
 // Store polynomial in increasing order
 // Time Complexity:
 // create: O(1)
+// free  : O(N)
 // append: O(1)
-// merge:  O(N+M)
-// pmult:  O(NM)
+// merge : O(N+M)
+// pmult : O(NM)
 typedef struct poly_t {
   COEFF_T coeff;
   DEG_T deg;
@@ -44,15 +45,14 @@ typedef struct poly_t {
 #define STK_EMPTY_E NULL
 // Stack, a LIFO container
 // Store "poly"
-// Its time complexity depends on its size(N)
 // create: O(1)
 // free  : O(N)
-// push  : O(N/ISZ), O(1) if N < ISZ
-// pop   : O(N/ISZ), O(1) if N < ISZ
+// push  : O(1)
+// pop   : O(1)
 typedef struct stack_t {
   int top, cur;
   STK_ELE_T stk[STK_ISZ];
-  struct stack_t *next;
+  struct stack_t *next, *prev;
 } stack_t, *stack;
 
 #define UALLOC_SZ (sizeof(poly_t))
@@ -60,11 +60,16 @@ typedef struct stack_t {
 #define PALLOC_SZ (UALLOC_SZ * PALLOC_CNT)
 // Poly Allocator Type
 // Create to fix memeory fragmentation problem and prevent from memory leaking
+// Time Complexity:
+// create   : O(PALLOC_SZ) -> O(1)
+// alloc    : O(1)
+// free     : O(1)
+// free_self: O(PALLOC_SZ) -> O(1)
 typedef struct palloc_t {
   int full, cmem;
   void *mem;
   stack rc_stk;
-  struct palloc_t *next;
+  struct palloc_t *next, *prev;
 } palloc_t, *palloc;
 
 
@@ -87,11 +92,13 @@ stack stk_create() {
   s->top = -1;
   s->cur = 1;
   s->next = NULL;
+  s->prev = NULL;
   return s;
 }
 
 void stk_free(stack s) {
   if(s == NULL) return;
+  while(s->prev != NULL) s = s->prev;
   stack next = s->next;
   while(s != NULL) {
     next = s->next;
@@ -100,39 +107,39 @@ void stk_free(stack s) {
   }
 }
 
-void stk_push(stack s, STK_ELE_T val) {
+void stk_push(stack *sp, STK_ELE_T val) {
+  assert(sp != NULL);
+  stack s = *sp;
   if(s == NULL) return;
-  while(!s->cur) {
-    s = s->next;
-    assert(s != NULL);
-  };
+  assert(s->cur == 1);
   if(s->top + 1 == STK_ISZ) {
     s->next = stk_create();
+    s->next->prev = s;
     s->cur = 0;
     s = s->next;
+    *sp = s;
   }
   s->stk[++s->top] = val;
 }
 
-STK_ELE_T stk_pop(stack s) {
+STK_ELE_T stk_pop(stack *sp) {
+  assert(sp != NULL);
+  stack s = *sp;
   if(s == NULL) return STK_EMPTY_E;
-  stack prev = NULL;
-  while(!s->cur) {
-    prev = s;
-    s = s->next;
-    assert(s != NULL);
-  }
+  assert(s->cur == 1);
   if(s->top == -1) return STK_EMPTY_E;
   STK_ELE_T ret = s->stk[s->top--];
-  if(s->top == -1 && prev != NULL) {
+  if(s->top == -1 && s->prev != NULL) {
     s->cur = 0;
-    prev->cur = 1;
+    s->prev->cur = 1;
+    *sp = s->prev;
   }
   return ret;
 }
 
 int stk_empty(stack s) {
-  return s->top == -1;
+  if(s == NULL) return 1;
+  return s->top == -1 && s->prev == NULL;
 }
 
 palloc palloc_create() {
@@ -140,8 +147,14 @@ palloc palloc_create() {
   npac->full = 0;
   npac->cmem = 0;
   npac->mem = malloc_s(PALLOC_SZ);
-  npac->rc_stk = stk_create();
   npac->next = NULL;
+  npac->prev = NULL;
+  return npac;
+}
+
+palloc palloc_create_global() {
+  palloc npac = palloc_create();
+  npac->rc_stk = stk_create();
   return npac;
 }
 
@@ -149,20 +162,20 @@ poly palloc_alloc() {
   eprintf("palloc_alloc()\n");
   palloc pac = pallocator;
   assert(pac != NULL);
-  while(pac->full) {
-    pac = pac->next;
-    assert(pac != NULL);
-  }
-  poly ret = stk_pop(pac->rc_stk);
+  assert(pac->full == 0);
+  poly ret = stk_pop(&pac->rc_stk);
   if(ret) {
     eprintf("begin_mem: %p, alloc_mem: %p\n", (poly)(pac->mem), ret);
     return ret;
   }
   assert(pac->cmem < PALLOC_CNT);
   ret = (poly)(pac->mem) + pac->cmem++;
-  if(pac->cmem == PALLOC_CNT) {
+  if(pac->cmem == PALLOC_CNT && stk_empty(pac->rc_stk)) {
     pac->full = 1;
     pac->next = palloc_create();
+    pac->next->prev = pac;
+    pac->next->rc_stk = pac->rc_stk;
+    pallocator = pac->next;
   }
   eprintf("begin_mem: %p, alloc_mem: %p\n", (poly)(pac->mem), ret);
   return ret;
@@ -171,22 +184,22 @@ poly palloc_alloc() {
 void palloc_free(poly *p) {
   palloc pac = pallocator;
   assert(pac != NULL);
-  // eprintf("palloc_free...\n");
   if(p == NULL) return;
   if(*p == NULL) return;
   pac->full = 0;
-  stk_push(pac->rc_stk, *p);
+  stk_push(&pac->rc_stk, *p);
   *p = NULL;
 }
 
 void palloc_free_self() {
   palloc pac = pallocator;
   assert(pac != NULL);
+  while(pac->prev != NULL) pac = pac->prev;
+  stk_free(pac->rc_stk);
   palloc next = pac->next;
   while(pac) {
     next = pac->next;
     free(pac->mem);
-    stk_free(pac->rc_stk);
     free(pac);
     pac = next;
   }
@@ -205,7 +218,6 @@ void poly_free(poly p) {
   poly next = p->next;
   while(p != NULL) {
     next = p->next;
-    // eprintf("poly_free...\n");
     palloc_free(&p);
     p = next;
   }
@@ -296,12 +308,12 @@ poly poly_create_from_input() {
       continue;
     }
     cur_mn_deg = cur_mn_deg > deg ? deg : cur_mn_deg;
-    stk_push(p_stk, poly_create(coeff, deg));
+    stk_push(&p_stk, poly_create(coeff, deg));
     assert(ret != NULL);
     scanf("%d", &coeff);
   }
   poly top = NULL;
-  while(top = stk_pop(p_stk)) {
+  while(top = stk_pop(&p_stk)) {
     retp = poly_append(retp, top);
   }
   return ret->next;
@@ -312,10 +324,10 @@ void poly_println(poly p) {
   CHECK_P_STK();
   int head = 1;
   while(p != NULL) {
-    stk_push(p_stk, p);
+    stk_push(&p_stk, p);
     p = p->next;
   }
-  while(p = stk_pop(p_stk)) {
+  while(p = stk_pop(&p_stk)) {
     int is_constant = p->deg == 0;
     if(head) {
       if(p->coeff != 1 && p->coeff != -1)
@@ -353,7 +365,7 @@ void poly_eprintln(poly p) {
 }
 
 int main() {
-  pallocator = palloc_create();
+  pallocator = palloc_create_global();
   p_stk = stk_create();
 
   poly p1 = NULL, p2 = NULL, pm = NULL;

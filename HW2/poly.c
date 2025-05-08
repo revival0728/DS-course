@@ -3,16 +3,6 @@
 #include <stddef.h>
 #include <assert.h>
 
-void* malloc_s(size_t size) {
-  void *p = malloc(size);
-  if(p == NULL) {
-    printf("memory allocation failed.");
-    return NULL;
-  }
-  return p;
-}
-
-
 // store polynomial in increasing order
 #define COEFF_T int
 #define DEG_T int
@@ -31,6 +21,29 @@ typedef struct stack_t {
   STK_ELE_T stk[STK_ISZ];
   struct stack_t *next;
 } stack_t, *stack;
+
+#define ALLOC_SZ (sizeof(poly_t))
+#define PALLOC_CNT 100
+#define PALLOC_SZ (ALLOC_SZ * PALLOC_CNT)
+// Poly Allocator Type
+// Create to fix memeory fragmentation problem
+typedef struct palloc_t {
+  int full, cmem;
+  void *mem;
+  stack rc_stk;
+  struct palloc_t *next;
+} palloc_t, *palloc;
+//Default pallocator
+palloc pac;
+
+void* malloc_s(size_t size) {
+  void *p = malloc(size);
+  if(p == NULL) {
+    printf("memory allocation failed.");
+    return NULL;
+  }
+  return p;
+}
 
 stack stk_create() {
   stack s = malloc_s(sizeof(stack_t));
@@ -81,8 +94,43 @@ STK_ELE_T stk_pop(stack s) {
   return ret;
 }
 
+palloc palloc_create() {
+  palloc npac = malloc_s(sizeof(palloc_t));
+  npac->full = 0;
+  npac->cmem = 0;
+  npac->mem = malloc_s(ALLOC_SZ);
+  npac->rc_stk = stk_create();
+  npac->next = NULL;
+  return npac;
+}
+
+poly palloc_alloc() {
+  assert(pac != NULL);
+  while(pac->full) {
+    pac = pac->next;
+    assert(pac != NULL);
+  }
+  poly ret = stk_pop(pac->rc_stk);
+  if(ret) return ret;
+  assert(pac->cmem < PALLOC_CNT);
+  ret = (poly)(pac->mem) + pac->cmem++;
+  if(pac->cmem == PALLOC_CNT) {
+    pac->full = 1;
+    pac->next = palloc_create();
+  }
+  return ret;
+}
+
+void palloc_free(poly *p) {
+  assert(pac != NULL);
+  if(p == NULL) return;
+  pac->full = 0;
+  stk_push(pac->rc_stk, *p);
+  *p = NULL;
+}
+
 poly poly_create(COEFF_T coeff, DEG_T deg) {
-  poly p = malloc_s(sizeof(poly_t));
+  poly p = palloc_alloc();
   p->coeff = coeff;
   p->deg = deg;
   p->next = NULL;
@@ -94,7 +142,7 @@ void poly_free(poly p) {
   poly next = p->next;
   while(p != NULL) {
     next = p->next;
-    free(p);
+    palloc_free(&p);
     p = next;
   }
 }
@@ -110,7 +158,6 @@ poly poly_append(poly p, poly pp) {
   p->next = pp;
   return pp;
 }
-
 
 #define poly_merge_move_ptr(ptr) tp=ptr->next;ptr->next=NULL;ptr=tp;
 // Add two polynomial without new memory allocation
@@ -130,7 +177,7 @@ poly poly_merge(poly p1, poly p2) {
       poly f = pp2;
       poly_merge_move_ptr(pp1);
       poly_merge_move_ptr(pp2);
-      free(f);
+      palloc_free(&f);
     } else if(pp1->deg > pp2->deg) {
       retp = poly_append(retp, pp2);
       poly_merge_move_ptr(pp2);

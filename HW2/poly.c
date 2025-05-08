@@ -1,12 +1,38 @@
+// Data Structrue HW2
+// Example Input:
+//  1 4 2 1 0
+//  1 5 2 1 0
+// Example Output:
+//  polynomial 1: x^4 + 2x^1
+//  polynomial 2: x^5 + 2x^1
+//  multiplication result: x^9 + 2x^6 + 2x^5 + 4x^2
+// pmult() is at line 260.
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
 #include <assert.h>
 
-// store polynomial in increasing order
+// Add DEBUG to see function logs
+// #define DEBUG
+
+#ifdef DEBUG
+#define eprintf(...) fprintf(stderr, __VA_ARGS__)
+#endif
+#ifndef DEBUG
+#define eprintf(format, ...)
+#endif
+
 #define COEFF_T int
 #define DEG_T int
 #define DEG_MIN (1 << 31)
+#define DEG_MAX (1 << 30)
+// Polynomial struct
+// Store polynomial in increasing order
+// Time Complexity:
+// create: O(1)
+// append: O(1)
+// merge:  O(N+M)
+// pmult:  O(NM)
 typedef struct poly_t {
   COEFF_T coeff;
   DEG_T deg;
@@ -16,30 +42,41 @@ typedef struct poly_t {
 #define STK_ISZ 100
 #define STK_ELE_T poly
 #define STK_EMPTY_E NULL
+// Stack, a LIFO container
+// Store "poly"
+// Its time complexity depends on its size(N)
+// create: O(1)
+// free  : O(N)
+// push  : O(N/ISZ), O(1) if N < ISZ
+// pop   : O(N/ISZ), O(1) if N < ISZ
 typedef struct stack_t {
   int top, cur;
   STK_ELE_T stk[STK_ISZ];
   struct stack_t *next;
 } stack_t, *stack;
 
-#define ALLOC_SZ (sizeof(poly_t))
+#define UALLOC_SZ (sizeof(poly_t))
 #define PALLOC_CNT 100
-#define PALLOC_SZ (ALLOC_SZ * PALLOC_CNT)
+#define PALLOC_SZ (UALLOC_SZ * PALLOC_CNT)
 // Poly Allocator Type
-// Create to fix memeory fragmentation problem
+// Create to fix memeory fragmentation problem and prevent from memory leaking
 typedef struct palloc_t {
   int full, cmem;
   void *mem;
   stack rc_stk;
   struct palloc_t *next;
 } palloc_t, *palloc;
-//Default pallocator
-palloc pac;
+
+
+// default global variables or functions
+palloc pallocator;  // poly allocator
+stack p_stk;        // poly stack     : for reversing a polynomial without changing origin
+#define CHECK_P_STK() assert(stk_empty(p_stk))
 
 void* malloc_s(size_t size) {
   void *p = malloc(size);
   if(p == NULL) {
-    printf("memory allocation failed.");
+    printf("memory allocation failed.\n");
     return NULL;
   }
   return p;
@@ -94,39 +131,65 @@ STK_ELE_T stk_pop(stack s) {
   return ret;
 }
 
+int stk_empty(stack s) {
+  return s->top == -1;
+}
+
 palloc palloc_create() {
   palloc npac = malloc_s(sizeof(palloc_t));
   npac->full = 0;
   npac->cmem = 0;
-  npac->mem = malloc_s(ALLOC_SZ);
+  npac->mem = malloc_s(PALLOC_SZ);
   npac->rc_stk = stk_create();
   npac->next = NULL;
   return npac;
 }
 
 poly palloc_alloc() {
+  eprintf("palloc_alloc()\n");
+  palloc pac = pallocator;
   assert(pac != NULL);
   while(pac->full) {
     pac = pac->next;
     assert(pac != NULL);
   }
   poly ret = stk_pop(pac->rc_stk);
-  if(ret) return ret;
+  if(ret) {
+    eprintf("begin_mem: %p, alloc_mem: %p\n", (poly)(pac->mem), ret);
+    return ret;
+  }
   assert(pac->cmem < PALLOC_CNT);
   ret = (poly)(pac->mem) + pac->cmem++;
   if(pac->cmem == PALLOC_CNT) {
     pac->full = 1;
     pac->next = palloc_create();
   }
+  eprintf("begin_mem: %p, alloc_mem: %p\n", (poly)(pac->mem), ret);
   return ret;
 }
 
 void palloc_free(poly *p) {
+  palloc pac = pallocator;
   assert(pac != NULL);
+  // eprintf("palloc_free...\n");
   if(p == NULL) return;
+  if(*p == NULL) return;
   pac->full = 0;
   stk_push(pac->rc_stk, *p);
   *p = NULL;
+}
+
+void palloc_free_self() {
+  palloc pac = pallocator;
+  assert(pac != NULL);
+  palloc next = pac->next;
+  while(pac) {
+    next = pac->next;
+    free(pac->mem);
+    stk_free(pac->rc_stk);
+    free(pac);
+    pac = next;
+  }
 }
 
 poly poly_create(COEFF_T coeff, DEG_T deg) {
@@ -142,15 +205,17 @@ void poly_free(poly p) {
   poly next = p->next;
   while(p != NULL) {
     next = p->next;
+    // eprintf("poly_free...\n");
     palloc_free(&p);
     p = next;
   }
 }
 
 // Append another poly pp to poly p
-// return pp
+// Check if the append operation is legal
+// @return pp
 poly poly_append(poly p, poly pp) {
-  fprintf(stderr, "poly_append()\n");
+  eprintf("poly_append()\n");
   if(p == NULL) return pp;
   if(pp == NULL) return p;
   assert(p->next == NULL);
@@ -164,6 +229,7 @@ poly poly_append(poly p, poly pp) {
 // Notice that it will break p1, p2
 // If p1, p2 have same degree element, merge to p1
 poly poly_merge(poly p1, poly p2) {
+  eprintf("poly_merge()\n");
   if(p1 == NULL) return p2;
   if(p2 == NULL) return p1;
   poly pp1 = p1, pp2 = p2, ret = NULL, retp = NULL, tp = NULL;
@@ -192,23 +258,21 @@ poly poly_merge(poly p1, poly p2) {
 }
 
 poly pmult(poly p1, poly p2) {
-  fprintf(stderr, "pmult()\n");
+  eprintf("pmult()\n");
   if(p1 == NULL || p2 == NULL) return NULL;
   poly ret = NULL, pp1 = p1;
-  while(pp1 != NULL) {
+  for(; pp1; pp1 = pp1->next) {
     poly res = NULL,  resp = NULL, pp2 = p2;
     res = poly_create(0, DEG_MIN);
     resp = res;
-    fprintf(stderr, "pmult(): multiply\n");
-    while(pp2 != NULL) {
+    eprintf("pmult(): multiply\n");
+    for(; pp2; pp2 = pp2->next) {
       DEG_T deg = pp1->deg + pp2->deg;
       COEFF_T coeff = pp1->coeff * pp2->coeff;
       resp = poly_append(resp, poly_create(coeff, deg));
-      pp2 = pp2->next;
     }
-    fprintf(stderr, "pmult(): merge\n");
+    eprintf("pmult(): merge\n");
     ret = poly_merge(ret, res->next);
-    pp1 = pp1->next;
   }
   return ret;
 }
@@ -216,32 +280,36 @@ poly pmult(poly p1, poly p2) {
 // Create new polynomial from user input
 // input format example: 2 1 3 4 0 -> 3x^4 + 2x^1
 poly poly_create_from_input() {
+  CHECK_P_STK();
   COEFF_T coeff;
-  DEG_T deg, cur_mx_deg = DEG_MIN;
+  DEG_T deg, cur_mn_deg = DEG_MAX;
   poly ret = NULL, retp = NULL;
   ret = poly_create(0, DEG_MIN);
   retp = ret;
   scanf("%d", &coeff);
   while(coeff != 0) {
     scanf("%d", &deg);
-    fprintf(stderr, "coeff, deg = %d, %d\n", coeff, deg);
-    if(ret != NULL && cur_mx_deg >= deg) {
-      printf("Please input elements in increasing order");
+    eprintf("Input coeff, deg = %d, %d\n", coeff, deg);
+    if(ret != NULL && cur_mn_deg <= deg) {
+      printf("Please input elements in descending order\n");
       scanf("%d", &coeff);
       continue;
     }
-    cur_mx_deg = cur_mx_deg < deg ? deg : cur_mx_deg;
-    fprintf(stderr, "input()\n");
-    retp = poly_append(retp, poly_create(coeff, deg));
+    cur_mn_deg = cur_mn_deg > deg ? deg : cur_mn_deg;
+    stk_push(p_stk, poly_create(coeff, deg));
     assert(ret != NULL);
     scanf("%d", &coeff);
+  }
+  poly top = NULL;
+  while(top = stk_pop(p_stk)) {
+    retp = poly_append(retp, top);
   }
   return ret->next;
 }
 
-stack p_stk = NULL;
 // Print polynomial in descending order
 void poly_println(poly p) {
+  CHECK_P_STK();
   int head = 1;
   while(p != NULL) {
     stk_push(p_stk, p);
@@ -256,9 +324,13 @@ void poly_println(poly p) {
       if(p->coeff > 0) {
         if(p->coeff > 1 || (p->coeff == 1 && is_constant))
           printf(" + %d", p->coeff);
+        else
+          printf(" + ");
       } else {
         if(p->coeff < -1 || (p->coeff == -1 && is_constant))
           printf(" - %d", -p->coeff);
+        else
+          printf(" - ");
       }
     }
     if(!is_constant) {
@@ -272,14 +344,18 @@ void poly_println(poly p) {
 
 // Print polynomial for debug
 void poly_eprintln(poly p) {
+  #ifdef DEBUG
   while(p != NULL) {
-    fprintf(stderr, "poly_eprintln: coeff, deg = %d, %d\n", p->coeff, p->deg);
+    eprintf("poly_eprintln: coeff, deg = %d, %d\n", p->coeff, p->deg);
     p = p->next;
   }
+  #endif
 }
 
 int main() {
+  pallocator = palloc_create();
   p_stk = stk_create();
+
   poly p1 = NULL, p2 = NULL, pm = NULL;
   printf("Input polynomial1 [(coeff)(deg), ..., 0]: ");
   p1 = poly_create_from_input();
@@ -288,6 +364,7 @@ int main() {
   p2 = poly_create_from_input();
   poly_eprintln(p2);
   pm = pmult(p1, p2);
+  printf("\n");
   printf("polynomial 1: "); poly_println(p1);
   printf("polynomial 2: "); poly_println(p2);
   printf("multiplication result: "); poly_println(pm);
@@ -296,4 +373,5 @@ int main() {
   poly_free(p1);
   poly_free(p2);
   poly_free(pm);
+  palloc_free_self();
 }

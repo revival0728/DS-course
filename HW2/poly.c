@@ -113,8 +113,12 @@ void stk_push(stack *sp, STK_ELE_T val) {
   if(s == NULL) return;
   assert(s->cur == 1);
   if(s->top + 1 == STK_ISZ) {
-    s->next = stk_create();
-    s->next->prev = s;
+    if(s->next == NULL) {
+      s->next = stk_create();
+      s->next->prev = s;
+    } else {
+      s->next->cur = 1;
+    }
     s->cur = 0;
     s = s->next;
     *sp = s;
